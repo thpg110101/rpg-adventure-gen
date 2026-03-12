@@ -1,0 +1,516 @@
+---
+/* Options editor UI and storage/export/import logic */
+import { adventureOptions, locations, locationWeights } from '../data/options';
+---
+<section class="editor-section">
+  <button type="button" class="editor-toggle" id="editor-toggle" aria-expanded="false">
+    Edit my options
+  </button>
+  <div class="editor-panel" id="editor-panel" hidden>
+    <p class="editor-hint">
+      Edit adventure categories, locations, and weights below. Click <strong>Save</strong> to use them. No coding needed.
+    </p>
+    <div class="editor-tabs">
+      <button type="button" class="editor-tab active" data-tab="options">Adventure options</button>
+      <button type="button" class="editor-tab" data-tab="locations">Locations &amp; weights</button>
+    </div>
+    <div id="editor-content" class="editor-tab-pane"></div>
+    <div id="editor-locations-pane" class="editor-tab-pane" hidden>
+      <h3 class="editor-subtitle">Locations</h3>
+      <p class="editor-hint small">
+        Start weight: higher = more likely as Start (e.g. 2 for Winnipeg, Thunder Bay, Thompson). Lat/Lon used to show 3
+        alternates nearest to End.
+      </p>
+      <div id="editor-locations"></div>
+      <button type="button" class="btn-add-cat" id="add-location-btn">+ Add location</button>
+      <h3 class="editor-subtitle">Weights (Start → End only)</h3>
+      <p class="editor-hint small">
+        When a location is Start, higher weight = more likely as End. Alternate is chosen by proximity to End (no
+        weights).
+      </p>
+      <div id="editor-weights"></div>
+      <button type="button" class="btn-add-cat" id="add-weight-btn">+ Add connection</button>
+    </div>
+    <div class="editor-actions">
+      <button type="button" class="btn-save" id="editor-save">Save</button>
+      <button type="button" class="btn-reset" id="editor-reset">Reset to defaults</button>
+    </div>
+    <div class="editor-controls">
+      <button
+        type="button"
+        class="editor-control-btn editor-control-btn-primary"
+        onclick="exportData()"
+      >
+        Export adventure data
+      </button>
+      <button type="button" class="editor-control-btn" onclick="importData()">
+        Import adventure data
+      </button>
+      <input type="file" id="import-file" accept=".json" style="display:none" />
+    </div>
+    <p class="editor-saved" id="editor-saved" role="status" aria-live="polite"></p>
+  </div>
+></section>
+
+<script define:vars={{ adventureOptions, locations, locationWeights }}>
+  const STORAGE_KEY = 'rpg-adventure-options';
+  const LOCATIONS_KEY = 'rpg-adventure-locations';
+  const WEIGHTS_KEY = 'rpg-adventure-location-weights';
+
+  let currentOptions = getOptions();
+  let currentLocations = getLocations();
+  let currentWeights = getLocationWeights();
+
+  const editorToggle = document.getElementById('editor-toggle');
+  const editorPanel = document.getElementById('editor-panel');
+  const editorContent = document.getElementById('editor-content');
+  const editorSave = document.getElementById('editor-save');
+  const editorReset = document.getElementById('editor-reset');
+  const editorSaved = document.getElementById('editor-saved');
+
+  function getOptions() {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return JSON.parse(JSON.stringify(adventureOptions));
+  }
+
+  function getLocations() {
+    try {
+      const saved = localStorage.getItem(LOCATIONS_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return JSON.parse(JSON.stringify(locations));
+  }
+
+  function getLocationWeights() {
+    try {
+      const saved = localStorage.getItem(WEIGHTS_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return JSON.parse(JSON.stringify(locationWeights));
+  }
+
+  function idFromTitle(title) {
+    return (title || 'cat').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || 'category';
+  }
+
+  function idFromLabel(label) {
+    return (label || 'loc').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || 'location';
+  }
+
+  function escapeAttr(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function renderLocationsEditor() {
+    const el = document.getElementById('editor-locations');
+    if (!el) return;
+    el.innerHTML = (currentLocations || [])
+      .map(
+        (loc, i) => `
+        <div class="editor-option-row editor-location-row" data-i="${i}">
+          <input type="text" class="editor-loc-label" value="${escapeAttr(loc.label)}" placeholder="Location name" />
+          <input type="text" class="editor-loc-desc" value="${escapeAttr(
+            loc.description || ''
+          )}" placeholder="Description (optional)" />
+          <label class="editor-loc-meta">Start weight <input type="number" class="editor-loc-start-weight" value="${
+            loc.startWeight ?? 1
+          }" min="0" step="1" title="Higher = more likely as Start" /></label>
+          <label class="editor-loc-meta">Lat <input type="number" class="editor-loc-lat" value="${
+            loc.lat ?? ''
+          }" step="any" placeholder="e.g. 49.89" title="For proximity" /></label>
+          <label class="editor-loc-meta">Lon <input type="number" class="editor-loc-lon" value="${
+            loc.lon ?? ''
+          }" step="any" placeholder="e.g. -97.14" /></label>
+          <button type="button" class="btn-remove-opt" data-remove-loc title="Remove">×</button>
+        </div>
+      `
+      )
+      .join('');
+    el.querySelectorAll('[data-remove-loc]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const row = b.closest('.editor-location-row');
+        const i = row ? parseInt(row.getAttribute('data-i') || '', 10) : NaN;
+        if (!isNaN(i)) {
+          currentLocations.splice(i, 1);
+          renderLocationsEditor();
+          renderWeightsEditor();
+        }
+      });
+    });
+  }
+
+  function renderWeightsEditor() {
+    const el = document.getElementById('editor-weights');
+    if (!el) return;
+    const locs = currentLocations || [];
+    const opts =
+      '<option value="">-- pick --</option>' +
+      locs.map((l) => `<option value="${escapeAttr(l.id)}">${escapeAttr(l.label)}</option>`).join('');
+    el.innerHTML = (currentWeights || [])
+      .map(
+        (w, i) => `
+        <div class="editor-weight-row" data-i="${i}">
+          <select class="editor-weight-start">${opts}</select>
+          <span class="editor-weight-arrow">→</span>
+          <select class="editor-weight-end">${opts}</select>
+          <input type="number" class="editor-weight-num" value="${w.weight}" min="0" step="1" placeholder="1" />
+          <button type="button" class="btn-remove-opt" data-remove-w title="Remove">×</button>
+        </div>
+      `
+      )
+      .join('');
+    (currentWeights || []).forEach((w, i) => {
+      const row = el.querySelector(`.editor-weight-row[data-i="${i}"]`);
+      if (row) {
+        row.querySelector('.editor-weight-start').value = w.startId || '';
+        row.querySelector('.editor-weight-end').value = w.endId || '';
+      }
+    });
+    el.querySelectorAll('[data-remove-w]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const row = b.closest('.editor-weight-row');
+        const i = row ? parseInt(row.getAttribute('data-i') || '', 10) : NaN;
+        if (!isNaN(i)) {
+          currentWeights.splice(i, 1);
+          renderWeightsEditor();
+        }
+      });
+    });
+  }
+
+  function renderEditor() {
+    if (!editorContent) return;
+    let html = '';
+    (currentOptions || []).forEach((cat, ci) => {
+      const catId = cat.id || idFromTitle(cat.title) || 'cat-' + ci;
+      html += `<fieldset class="editor-category" data-cat-index="${ci}">
+          <legend class="editor-cat-legend">
+            <input type="text" class="editor-cat-title" value="${escapeAttr(
+              cat.title
+            )}" placeholder="Category name" data-cat-index="${ci}" />
+            <button type="button" class="btn-move-cat" data-dir="up" data-cat-index="${ci}" title="Move category up">↑</button>
+            <button type="button" class="btn-move-cat" data-dir="down" data-cat-index="${ci}" title="Move category down">↓</button>
+            <button type="button" class="btn-remove-cat" data-cat-index="${ci}" title="Remove this category">Remove category</button>
+          </legend>
+          <ul class="editor-options-list">`;
+      (cat.options || []).forEach((opt) => {
+        html += `<li class="editor-option-row">
+            <input type="text" class="editor-opt-label" value="${escapeAttr(opt.label)}" placeholder="Option text" />
+            <input type="text" class="editor-opt-desc" value="${escapeAttr(
+              opt.description || ''
+            )}" placeholder="Extra detail (optional)" />
+            <button type="button" class="btn-remove-opt" title="Remove this option">×</button>
+          </li>`;
+      });
+      html += `</ul>
+          <button type="button" class="btn-add-opt" data-cat-index="${ci}">+ Add option</button>
+        </fieldset>`;
+    });
+    html += `<button type="button" class="btn-add-cat">+ Add category</button>`;
+    editorContent.innerHTML = html;
+
+    editorContent.querySelectorAll('.btn-remove-opt').forEach((b) => {
+      b.addEventListener('click', () => {
+        const row = b.closest('.editor-option-row');
+        if (row) row.remove();
+      });
+    });
+    editorContent.querySelectorAll('.btn-add-opt').forEach((b) => {
+      b.addEventListener('click', () => {
+        const ci = parseInt(b.getAttribute('data-cat-index'), 10);
+        const list = editorContent.querySelectorAll('.editor-category')[ci]?.querySelector('.editor-options-list');
+        if (list) {
+          const li = document.createElement('li');
+          li.className = 'editor-option-row';
+          li.innerHTML = `<input type="text" class="editor-opt-label" placeholder="Option text" />
+              <input type="text" class="editor-opt-desc" placeholder="Extra detail (optional)" />
+              <button type="button" class="btn-remove-opt" title="Remove this option">×</button>`;
+          li.querySelector('.btn-remove-opt').addEventListener('click', () => li.remove());
+          list.appendChild(li);
+        }
+      });
+    });
+    editorContent.querySelectorAll('.btn-remove-cat').forEach((b) => {
+      b.addEventListener('click', () => {
+        const ci = parseInt(b.getAttribute('data-cat-index'), 10);
+        const fieldset = editorContent.querySelector(`.editor-category[data-cat-index="${ci}"]`);
+        if (fieldset) fieldset.remove();
+      });
+    });
+    editorContent.querySelectorAll('.btn-move-cat').forEach((b) => {
+      b.addEventListener('click', () => {
+        const ciRaw = b.getAttribute('data-cat-index');
+        const dir = b.getAttribute('data-dir');
+        if (ciRaw == null || !dir) return;
+        const ci = parseInt(ciRaw, 10);
+        if (isNaN(ci)) return;
+        // Capture current unsaved edits into memory before reordering
+        readEditorIntoOptions();
+        const fromIndex = ci;
+        const toIndex = dir === 'up' ? fromIndex - 1 : fromIndex + 1;
+        if (toIndex < 0 || toIndex >= currentOptions.length) return;
+        const [moved] = currentOptions.splice(fromIndex, 1);
+        currentOptions.splice(toIndex, 0, moved);
+        renderEditor();
+      });
+    });
+    const addCatBtn = editorContent.querySelector('.btn-add-cat');
+    if (addCatBtn) {
+      addCatBtn.addEventListener('click', () => {
+        // Preserve any unsaved categories/options in temporary memory before adding a new one
+        readEditorIntoOptions();
+        currentOptions = currentOptions || [];
+        currentOptions.push({ id: 'new-' + Date.now(), title: 'New category', options: [{ label: '' }] });
+        renderEditor();
+      });
+    }
+    renderLocationsEditor();
+    renderWeightsEditor();
+  }
+
+  document.querySelectorAll('.editor-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const t = tab.getAttribute('data-tab');
+      document.querySelectorAll('.editor-tab').forEach((x) => x.classList.remove('active'));
+      tab.classList.add('active');
+      const optsPane = document.getElementById('editor-content');
+      const locsPane = document.getElementById('editor-locations-pane');
+      if (t === 'options') {
+        optsPane?.classList.remove('editor-tab-hidden');
+        locsPane?.setAttribute('hidden', '');
+      } else {
+        optsPane?.classList.add('editor-tab-hidden');
+        locsPane?.removeAttribute('hidden');
+      }
+    });
+  });
+
+  document.getElementById('add-location-btn')?.addEventListener('click', () => {
+    readLocationsFromEditor();
+    currentLocations = currentLocations || [];
+    currentLocations.push({ id: 'new-' + Date.now(), label: '', description: '', startWeight: 1 });
+    renderLocationsEditor();
+    renderWeightsEditor();
+  });
+
+  document.getElementById('add-weight-btn')?.addEventListener('click', () => {
+    currentWeights = currentWeights || [];
+    const firstId = (currentLocations && currentLocations[0]?.id) || '';
+    currentWeights.push({ startId: firstId, endId: firstId, weight: 1 });
+    renderWeightsEditor();
+  });
+
+  function readEditorIntoOptions() {
+    const categories = editorContent.querySelectorAll('.editor-category');
+    const next = [];
+    categories.forEach((fs, ci) => {
+      const titleInput = fs.querySelector('.editor-cat-title');
+      const title = titleInput?.value?.trim() || 'Category ' + (ci + 1);
+      const rows = fs.querySelectorAll('.editor-option-row');
+      const options = [];
+      rows.forEach((row) => {
+        const label = row.querySelector('.editor-opt-label')?.value?.trim();
+        if (label)
+          options.push({
+            label,
+            description: row.querySelector('.editor-opt-desc')?.value?.trim() || undefined,
+          });
+      });
+      if (options.length === 0) options.push({ label: '' });
+      next.push({ id: idFromTitle(title), title, options });
+    });
+    currentOptions = next;
+  }
+
+  function readLocationsFromEditor() {
+    const el = document.getElementById('editor-locations');
+    if (!el) return;
+    const rows = el.querySelectorAll('.editor-location-row');
+    const seen = {};
+    currentLocations = [];
+    rows.forEach((row, index) => {
+      const label = row.querySelector('.editor-loc-label')?.value?.trim() ?? '';
+      const description = row.querySelector('.editor-loc-desc')?.value?.trim() || undefined;
+      const startWeightRaw = row.querySelector('.editor-loc-start-weight')?.value;
+      const startWeight =
+        startWeightRaw !== '' && startWeightRaw != null ? parseInt(startWeightRaw, 10) : 1;
+      const latRaw = row.querySelector('.editor-loc-lat')?.value;
+      const lat = latRaw !== '' && latRaw != null ? parseFloat(latRaw) : undefined;
+      const lonRaw = row.querySelector('.editor-loc-lon')?.value;
+      const lon = lonRaw !== '' && lonRaw != null ? parseFloat(lonRaw) : undefined;
+      let id;
+      if (label) {
+        id = idFromLabel(label);
+        if (seen[id]) {
+          let n = 1;
+          while (seen[id + '-' + n]) n++;
+          id = id + '-' + n;
+        }
+        seen[id] = true;
+      } else {
+        id = 'unsaved-' + index;
+      }
+      currentLocations.push({
+        id,
+        label: label || '',
+        description,
+        startWeight: isNaN(startWeight) ? 1 : Math.max(0, startWeight),
+        lat: lat !== undefined && !isNaN(lat) ? lat : undefined,
+        lon: lon !== undefined && !isNaN(lon) ? lon : undefined,
+      });
+    });
+  }
+
+  function readWeightsFromEditor() {
+    const el = document.getElementById('editor-weights');
+    if (!el) return;
+    const rows = el.querySelectorAll('.editor-weight-row');
+    currentWeights = [];
+    rows.forEach((row) => {
+      const startId = row.querySelector('.editor-weight-start')?.value;
+      const endId = row.querySelector('.editor-weight-end')?.value;
+      const weight = parseInt(row.querySelector('.editor-weight-num')?.value, 10);
+      if (startId && endId)
+        currentWeights.push({
+          startId,
+          endId: endId,
+          weight: isNaN(weight) ? 1 : Math.max(0, weight),
+        });
+    });
+  }
+
+  editorToggle?.addEventListener('click', () => {
+    const open = editorPanel?.getAttribute('hidden') != null;
+    if (open) {
+      editorPanel?.removeAttribute('hidden');
+      editorToggle?.setAttribute('aria-expanded', 'true');
+      renderEditor();
+    } else {
+      editorPanel?.setAttribute('hidden', '');
+      editorToggle?.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  editorSave?.addEventListener('click', () => {
+    readEditorIntoOptions();
+    readLocationsFromEditor();
+    readWeightsFromEditor();
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(currentOptions));
+      const locationsToSave = (currentLocations || []).filter((l) => (l.label || '').trim());
+      localStorage.setItem(LOCATIONS_KEY, JSON.stringify(locationsToSave));
+      localStorage.setItem(WEIGHTS_KEY, JSON.stringify(currentWeights || []));
+      if (editorSaved) {
+        editorSaved.textContent = 'Saved! Locations and options will be used when you generate.';
+        editorSaved.classList.add('visible');
+      }
+      setTimeout(() => {
+        editorSaved.textContent = '';
+        editorSaved.classList.remove('visible');
+      }, 3000);
+    } catch (_) {
+      if (editorSaved) {
+        editorSaved.textContent = 'Could not save (browser may block storage).';
+        editorSaved.classList.add('visible');
+      }
+    }
+  });
+
+  editorReset?.addEventListener('click', () => {
+    if (confirm('Reset to the default options? Your saved list will be cleared.')) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LOCATIONS_KEY);
+      localStorage.removeItem(WEIGHTS_KEY);
+      currentOptions = JSON.parse(JSON.stringify(adventureOptions));
+      renderEditor();
+      if (editorSaved) {
+        editorSaved.textContent = 'Reset to defaults. Reload the page to see them everywhere.';
+        editorSaved.classList.add('visible');
+      }
+      setTimeout(() => location.reload(), 1500);
+    }
+  });
+
+  window.exportData = function () {
+    const data = {
+      options: localStorage.getItem(STORAGE_KEY),
+      locations: localStorage.getItem(LOCATIONS_KEY),
+      weights: localStorage.getItem(WEIGHTS_KEY),
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'rpg-adventure-backup.json';
+
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    URL.revokeObjectURL(url);
+  };
+
+  window.importData = function () {
+    const input = document.getElementById('import-file');
+    input.click();
+  };
+
+  document.getElementById('import-file')?.addEventListener('change', function (event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = function (e) {
+      try {
+        const data = JSON.parse(e.target.result);
+
+        if (data.options) {
+          localStorage.setItem(STORAGE_KEY, data.options);
+        }
+
+        if (data.locations) {
+          localStorage.setItem(LOCATIONS_KEY, data.locations);
+        }
+
+        if (data.weights) {
+          localStorage.setItem(WEIGHTS_KEY, data.weights);
+        }
+
+        alert('Adventure data imported successfully!');
+        location.reload();
+      } catch (err) {
+        alert('Invalid backup file.');
+      }
+    };
+
+    reader.readAsText(file);
+  });
+
+  window.resetData = function () {
+    if (confirm('Reset to the default options? Your saved list will be cleared.')) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LOCATIONS_KEY);
+      localStorage.removeItem(WEIGHTS_KEY);
+      currentOptions = JSON.parse(JSON.stringify(adventureOptions));
+      renderEditor();
+      if (editorSaved) {
+        editorSaved.textContent = 'Reset to defaults. Reload the page to see them everywhere.';
+        editorSaved.classList.add('visible');
+      }
+      setTimeout(() => location.reload(), 1500);
+    }
+  };
+</script>
+

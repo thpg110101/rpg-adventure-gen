@@ -1,0 +1,251 @@
+---
+import { locations, locationWeights } from '../data/options';
+---
+<section class="locations-section">
+  <h2 class="section-title">1. Choose locations</h2>
+  <p class="section-desc">
+    Start is random (Winnipeg, Thunder Bay, Thompson a bit more likely). End is weighted by Start. Pick one Alternate from the 3 nearest to End.
+  </p>
+  <button type="button" class="generate-btn" id="locations-btn">
+    Generate locations
+  </button>
+  <output class="locations-result" id="locations-result" aria-live="polite">
+    <span class="result-placeholder">Click the button to get Start, End, and 3 Alternate options to choose from.</span>
+  </output>
+</section>
+
+<script define:vars={{ locations, locationWeights }}>
+  const LOCATIONS_KEY = 'rpg-adventure-locations';
+  const WEIGHTS_KEY = 'rpg-adventure-location-weights';
+
+  function getLocations() {
+    try {
+      const saved = localStorage.getItem(LOCATIONS_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return JSON.parse(JSON.stringify(locations));
+  }
+
+  function getLocationWeights() {
+    try {
+      const saved = localStorage.getItem(WEIGHTS_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return JSON.parse(JSON.stringify(locationWeights));
+  }
+
+  function buildWeightMap(weights) {
+    const map = {};
+    (weights || []).forEach((w) => {
+      if (!map[w.startId]) map[w.startId] = {};
+      map[w.startId][w.endId] = Math.max(0, Number(w.weight)) || 1;
+    });
+    return map;
+  }
+
+  function weightedPickStart(locList) {
+    const list = (locList || []).filter((l) => l?.id && l?.label);
+    if (list.length === 0) return null;
+    let total = 0;
+    const weighted = list.map((loc) => {
+      const w = Math.max(0, Number(loc.startWeight)) || 1;
+      total += w;
+      return { loc, w, cumul: 0 };
+    });
+    weighted.forEach((x, i) => {
+      x.cumul = (weighted[i - 1]?.cumul ?? 0) + x.w;
+    });
+    const r = Math.random() * total;
+    const chosen = weighted.find((x) => r < x.cumul);
+    return chosen ? chosen.loc : list[0];
+  }
+
+  function distanceKm(a, b) {
+    if (a.lat == null || a.lon == null || b.lat == null || b.lon == null) return Infinity;
+    const R = 6371;
+    const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+    const dLon = ((b.lon - a.lon) * Math.PI) / 180;
+    const x =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((a.lat * Math.PI) / 180) *
+        Math.cos((b.lat * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+    return R * c;
+  }
+
+  function weightedPick(locList, excludeIds, weightMap, startId) {
+    const allowed = locList.filter((loc) => !excludeIds.includes(loc.id));
+    if (allowed.length === 0) return null;
+    const weightsForStart = weightMap[startId] || {};
+    let total = 0;
+    const weighted = allowed.map((loc) => {
+      const w = weightsForStart[loc.id] !== undefined ? weightsForStart[loc.id] : 1;
+      total += w;
+      return { loc, w, cumul: 0 };
+    });
+    weighted.forEach((x, i) => {
+      x.cumul = (weighted[i - 1]?.cumul ?? 0) + x.w;
+    });
+    const r = Math.random() * total;
+    const chosen = weighted.find((x) => r < x.cumul);
+    return chosen ? chosen.loc : allowed[0];
+  }
+
+  function pickRandom(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  function escapeAttr(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function makeCardHtml(title, loc, extraClass) {
+    return `<div class="result-card ${extraClass || ''}" data-loc-id="${escapeAttr(loc.id)}">
+        <span class="result-category">${escapeAttr(title)}</span>
+        <strong class="result-label">${escapeAttr(loc.label)}</strong>
+        ${loc.description ? `<span class="result-desc">${escapeAttr(loc.description)}</span>` : ''}
+      </div>`;
+  }
+
+  function setAlternateCandidate(loc, fromCard, choicesEl, chosenEl, confirmBtn) {
+    if (!loc) return;
+    choicesEl?.querySelectorAll('.alternate-choice').forEach((c) => c.classList.remove('selected'));
+    if (fromCard) {
+      fromCard.classList.add('selected');
+    }
+    if (chosenEl) {
+      chosenEl.hidden = false;
+      chosenEl.innerHTML = makeCardHtml('Your alternate', loc, '');
+    }
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+    }
+  }
+
+  const locationsBtn = document.getElementById('locations-btn');
+  const locationsResult = document.getElementById('locations-result');
+
+  locationsBtn?.addEventListener('click', () => {
+    const locs = getLocations(locations);
+    const weights = getLocationWeights(locationWeights);
+    const weightMap = buildWeightMap(weights);
+    const valid = (locs || []).filter((l) => l?.id && l?.label);
+    if (valid.length < 4) {
+      if (locationsResult) {
+        locationsResult.innerHTML =
+          '<span class="error">Add at least 4 locations in Edit my options (Locations tab).</span>';
+      }
+      return;
+    }
+    const start = weightedPickStart(valid);
+    const end =
+      (start && weightedPick(valid, [start.id], weightMap, start.id)) ||
+      pickRandom(valid.filter((l) => l.id !== start.id));
+    const excludeIds = [start.id, end.id];
+    const others = valid.filter((l) => !excludeIds.includes(l.id));
+    const withDistance = others.map((loc) => ({ loc, d: distanceKm(loc, end) }));
+    withDistance.sort((a, b) => a.d - b.d);
+    const alternateThree = withDistance.slice(0, 3).map((x) => x.loc);
+    while (alternateThree.length < 3 && withDistance.length > alternateThree.length) {
+      const next = withDistance[alternateThree.length];
+      if (next) alternateThree.push(next.loc);
+      else break;
+    }
+    let html =
+      makeCardHtml('Start', start, '') +
+      makeCardHtml('End', end, '') +
+      `<div class="alternate-prompt">Alternate (choose one):</div>
+        <div class="alternate-choices" id="alternate-choices">`;
+    alternateThree.forEach((loc) => {
+      html += makeCardHtml('', loc, 'alternate-choice');
+    });
+    html += makeCardHtml('Others', { id: 'others', label: 'Pick from all locations' }, 'alternate-choice alternate-others');
+    html += `</div>
+      <div class="alternate-others-panel" id="alternate-others-panel" hidden>
+        <label class="alternate-others-label" for="alternate-others-select">Pick another location</label>
+        <select id="alternate-others-select" class="alternate-others-select" size="8">
+          ${valid
+            .filter((loc) => !excludeIds.includes(loc.id))
+            .map(
+              (loc) =>
+                `<option value="${escapeAttr(loc.id)}">${escapeAttr(loc.label)}${
+                  loc.description ? ` — ${escapeAttr(loc.description)}` : ''
+                }</option>`
+            )
+            .join('')}
+        </select>
+      </div>
+      <div class="alternate-actions" id="alternate-actions" hidden>
+        <button type="button" class="alternate-confirm-btn" id="alternate-confirm-btn" disabled>Confirm alternate</button>
+      </div>
+      <div class="alternate-chosen" id="alternate-chosen" hidden></div>`;
+    if (locationsResult) {
+      locationsResult.innerHTML = html;
+    }
+    const choicesEl = document.getElementById('alternate-choices');
+    const chosenEl = document.getElementById('alternate-chosen');
+    const othersPanel = document.getElementById('alternate-others-panel');
+    const othersSelect = document.getElementById('alternate-others-select');
+    const actionsEl = document.getElementById('alternate-actions');
+    const confirmBtn = document.getElementById('alternate-confirm-btn');
+    let candidate = null;
+
+    choicesEl?.querySelectorAll('.alternate-choice').forEach((div) => {
+      div.setAttribute('role', 'button');
+      div.setAttribute('tabindex', '0');
+      const isOthers = div.classList.contains('alternate-others');
+      const handler = () => {
+        if (isOthers) {
+          if (othersPanel && actionsEl) {
+            othersPanel.hidden = false;
+            actionsEl.hidden = false;
+          }
+        } else {
+          const locId = div.getAttribute('data-loc-id');
+          const loc = valid.find((l) => l.id === locId);
+          candidate = loc;
+          if (othersPanel) {
+            othersPanel.hidden = true;
+          }
+          setAlternateCandidate(loc, div, choicesEl, chosenEl, confirmBtn);
+          if (actionsEl) {
+            actionsEl.hidden = false;
+          }
+        }
+      };
+      div.addEventListener('click', handler);
+      div.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handler();
+        }
+      });
+    });
+
+    if (othersSelect) {
+      othersSelect.addEventListener('change', () => {
+        const value = othersSelect.value;
+        const loc = valid.find((l) => l.id === value);
+        candidate = loc;
+        setAlternateCandidate(loc, null, choicesEl, chosenEl, confirmBtn);
+      });
+    }
+
+    confirmBtn?.addEventListener('click', () => {
+      if (!candidate || !locationsResult) return;
+      const finalHtml =
+        makeCardHtml('Start', start, '') +
+        makeCardHtml('End', end, '') +
+        makeCardHtml('Alternate', candidate, '');
+      locationsResult.innerHTML = finalHtml;
+    });
+  });
+</script>
+

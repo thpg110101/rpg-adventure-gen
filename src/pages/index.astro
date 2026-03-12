@@ -1,0 +1,22 @@
+---
+import Layout from '../layouts/Layout.astro';
+import AdventureGenerator from '../components/AdventureGenerator.astro';
+import LocationGenerator from '../components/LocationGenerator.astro';
+import OptionsEditor from '../components/OptionsEditor.astro';
+---
+<Layout title="RPG Adventure Generator">
+  <main class="wrapper">
+    <header class="header">
+      <h1>RPG Adventure Generator</h1>
+      <p class="tagline">Roll the dice. Forge the tale.</p>
+    </header>
+
+    <LocationGenerator />
+    <AdventureGenerator />
+    <OptionsEditor />
+
+    <footer class="footer">
+      <p>Use <strong>Edit my options</strong> above to add your own settings, hooks, and stakes—no coding needed. Your list is saved in this browser.</p>
+    </footer>
+  </main>
+</Layout>

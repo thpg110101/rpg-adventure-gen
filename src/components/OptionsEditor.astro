@@ -1,0 +1,260 @@
+---
+/* Options editor UI and storage/export/import logic */
+import { adventureOptions, locations, locationWeights } from '../data/options';
+---
+<section class="editor-section">
+  <button type="button" class="editor-toggle" id="editor-toggle" aria-expanded="false">
+    Edit my options
+  </button>
+
+  <div class="editor-panel" id="editor-panel" hidden>
+    <p class="editor-hint">
+      Edit adventure categories, locations, and weights below. Click <strong>Save Changes</strong> to use them.
+    </p>
+
+    <div class="editor-tabs">
+      <button type="button" class="editor-tab active" data-tab="options">Adventure options</button>
+      <button type="button" class="editor-tab" data-tab="locations">Locations &amp; weights</button>
+    </div>
+
+    <div id="editor-content" class="editor-tab-pane"></div>
+    <button type="button" class="btn-add-cat" id="add-category-btn" style="margin-top: 1rem;">+ Add category</button>
+
+    <div id="editor-locations-pane" class="editor-tab-pane" hidden>
+      <h3 class="editor-subtitle">Locations</h3>
+      <div id="editor-locations"></div>
+      <button type="button" class="btn-add-cat" id="add-location-btn">+ Add location</button>
+
+      <h3 class="editor-subtitle" style="margin-top: 2rem;">Weights (Start → End only)</h3>
+      <div id="editor-weights"></div>
+      <button type="button" class="btn-add-cat" id="add-weight-btn">+ Add connection</button>
+    </div>
+
+    <div class="editor-actions">
+      <div class="primary-actions">
+        <button type="button" class="btn-save" id="save-options">Save Changes</button>
+        <button type="button" class="btn-default" id="set-default-btn">Set as My Default</button>
+        <button type="button" class="btn-reset" id="factory-reset-btn">Reset to Factory</button>
+      </div>
+
+      <div class="backup-actions">
+        <button type="button" class="btn-secondary" id="export-json-btn">Export Clean JSON</button>
+        <button type="button" class="btn-secondary" id="import-trigger-btn">Import Backup</button>
+        <input type="file" id="import-file" accept=".json" style="display:none" />
+      </div>
+      
+      <p id="editor-status-msg" class="save-status" role="status" aria-live="polite"></p>
+    </div>
+  </div>
+</section>
+
+<script>
+  import { adventureOptions, locations, locationWeights } from '../data/options';
+  import { STORAGE_KEY, LOCATIONS_KEY, WEIGHTS_KEY, saveAdventureData } from '../lib/storage';
+
+  // --- 1. STATE MANAGEMENT ---
+  let currentOptions = [];
+  let currentLocations = [];
+  let currentWeights = [];
+
+  function init() {
+    const savedOpts = localStorage.getItem(STORAGE_KEY);
+    const savedLocs = localStorage.getItem(LOCATIONS_KEY);
+    const savedWght = localStorage.getItem(WEIGHTS_KEY);
+
+    // Initialize state from storage or defaults
+    currentOptions = savedOpts ? JSON.parse(savedOpts) : JSON.parse(JSON.stringify(adventureOptions));
+    currentLocations = savedLocs ? JSON.parse(savedLocs) : JSON.parse(JSON.stringify(locations));
+    currentWeights = savedWght ? JSON.parse(savedWght) : JSON.parse(JSON.stringify(locationWeights));
+    
+    renderAll();
+  }
+
+  // --- 2. UI TOGGLE & TABS ---
+  const toggleBtn = document.getElementById('editor-toggle');
+  const panel = document.getElementById('editor-panel');
+  
+  toggleBtn?.addEventListener('click', () => {
+    const isExpanded = toggleBtn.getAttribute('aria-expanded') === 'true';
+    toggleBtn.setAttribute('aria-expanded', (!isExpanded).toString());
+    if (panel) panel.hidden = isExpanded;
+  });
+
+  document.querySelectorAll('.editor-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.getAttribute('data-tab');
+      document.querySelectorAll('.editor-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+
+      const optionsPane = document.getElementById('editor-content');
+      const addCatBtn = document.getElementById('add-category-btn');
+      const locationsPane = document.getElementById('editor-locations-pane');
+
+      if (target === 'options') {
+        optionsPane.hidden = false;
+        addCatBtn.style.display = 'block';
+        locationsPane.hidden = true;
+      } else {
+        optionsPane.hidden = true;
+        addCatBtn.style.display = 'none';
+        locationsPane.hidden = false;
+      }
+    });
+  });
+
+  // --- 3. RENDERING ENGINE ---
+  function renderAll() {
+    renderAdventureOptions();
+    renderLocations();
+    renderWeights();
+  }
+
+  function renderAdventureOptions() {
+    const container = document.getElementById('editor-content');
+    if (!container) return;
+    container.innerHTML = currentOptions.map((cat, catIdx) => `
+      <div class="editor-cat-card">
+        <div class="editor-cat-header">
+          <div class="cat-title-group">
+            <div class="reorder-btns">
+              <button type="button" class="btn-reorder" onclick="moveCat(${catIdx}, -1)" title="Move Up" ${catIdx === 0 ? 'disabled' : ''}>▲</button>
+              <button type="button" class="btn-reorder" onclick="moveCat(${catIdx}, 1)" title="Move Down" ${catIdx === currentOptions.length - 1 ? 'disabled' : ''}>▼</button>
+            </div>
+            <input type="text" class="cat-title-input" value="${cat.title}" onchange="updateCatTitle(${catIdx}, this.value)" />
+          </div>
+          <button type="button" class="btn-remove" onclick="removeCategory(${catIdx})">Remove</button>
+        </div>
+        <div class="editor-option-list">
+          ${cat.options.map((opt, optIdx) => `
+            <div class="editor-option-row">
+              <input type="text" value="${opt.label}" onchange="updateOption(${catIdx}, ${optIdx}, 'label', this.value)" placeholder="Option Label" />
+              <input type="text" value="${opt.description || ''}" onchange="updateOption(${catIdx}, ${optIdx}, 'description', this.value)" placeholder="Description" />
+              <button type="button" class="btn-remove-small" onclick="removeOption(${catIdx}, ${optIdx})">×</button>
+            </div>
+          `).join('')}
+          <button type="button" class="btn-add-small" onclick="addOption(${catIdx})">+ Add Option</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderLocations() {
+    const container = document.getElementById('editor-locations');
+    if (!container) return;
+    container.innerHTML = currentLocations.map((loc, idx) => `
+      <div class="editor-option-row">
+        <input type="text" style="width:140px" value="${loc.label}" onchange="updateLoc(${idx}, 'label', this.value)" placeholder="City" />
+        <input type="number" style="width:70px" value="${loc.startWeight}" onchange="updateLoc(${idx}, 'startWeight', this.value)" title="Start Weight" />
+        <button type="button" class="btn-remove-small" onclick="removeLoc(${idx})">×</button>
+      </div>
+    `).join('');
+  }
+
+  function renderWeights() {
+    const container = document.getElementById('editor-weights');
+    if (!container) return;
+    container.innerHTML = currentWeights.map((w, idx) => `
+      <div class="editor-option-row">
+        <select onchange="updateWeight(${idx}, 'startId', this.value)">
+          ${currentLocations.map(l => `<option value="${l.id}" ${l.id === w.startId ? 'selected' : ''}>${l.label}</option>`).join('')}
+        </select>
+        <span>→</span>
+        <select onchange="updateWeight(${idx}, 'endId', this.value)">
+          ${currentLocations.map(l => `<option value="${l.id}" ${l.id === w.endId ? 'selected' : ''}>${l.label}</option>`).join('')}
+        </select>
+        <input type="number" style="width:60px" value="${w.weight}" onchange="updateWeight(${idx}, 'weight', this.value)" />
+        <button type="button" class="btn-remove-small" onclick="removeWeight(${idx})">×</button>
+      </div>
+    `).join('');
+  }
+
+  // --- 4. DATA MUTATION (Window Scoped) ---
+  (window as any).moveCat = (idx, direction) => {
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= currentOptions.length) return;
+    [currentOptions[idx], currentOptions[newIdx]] = [currentOptions[newIdx], currentOptions[idx]];
+    renderAll();
+  };
+
+  (window as any).updateCatTitle = (idx, val) => { currentOptions[idx].title = val; };
+  (window as any).removeCategory = (idx) => { if(confirm("Delete category?")) { currentOptions.splice(idx, 1); renderAll(); } };
+  (window as any).addOption = (idx) => { currentOptions[idx].options.push({ label: '', description: '' }); renderAll(); };
+  (window as any).removeOption = (cIdx, oIdx) => { currentOptions[cIdx].options.splice(oIdx, 1); renderAll(); };
+  (window as any).updateOption = (cIdx, oIdx, key, val) => { currentOptions[cIdx].options[oIdx][key] = val; };
+  (window as any).updateLoc = (idx, key, val) => { currentLocations[idx][key] = key === 'label' ? val : Number(val); };
+  (window as any).removeLoc = (idx) => { currentLocations.splice(idx, 1); renderAll(); };
+  (window as any).updateWeight = (idx, key, val) => { currentWeights[idx][key] = key === 'weight' ? Number(val) : val; };
+  (window as any).removeWeight = (idx) => { currentWeights.splice(idx, 1); renderAll(); };
+
+  document.getElementById('add-category-btn')?.addEventListener('click', () => {
+    currentOptions.push({ id: 'cat-' + Date.now(), title: 'New Category', options: [] });
+    renderAll();
+  });
+
+  // --- 5. THEME-MATCHED ACTION LOGIC ---
+  const statusMsg = document.getElementById('editor-status-msg');
+  const showStatus = (text) => {
+    if (statusMsg) {
+      statusMsg.textContent = text;
+      setTimeout(() => statusMsg.textContent = '', 3000);
+    }
+  };
+
+  document.getElementById('save-options')?.addEventListener('click', () => {
+    saveAdventureData(currentOptions, currentLocations, currentWeights);
+    showStatus('Changes saved to session!');
+  });
+
+  document.getElementById('set-default-btn')?.addEventListener('click', () => {
+    if (confirm("Set these settings as your new default?")) {
+      saveAdventureData(currentOptions, currentLocations, currentWeights);
+      showStatus('New default set!');
+    }
+  });
+
+  document.getElementById('factory-reset-btn')?.addEventListener('click', () => {
+    if (confirm("Reset everything to factory settings? This cannot be undone.")) {
+      localStorage.clear();
+      location.reload();
+    }
+  });
+
+  // --- 6. EXPORT / IMPORT ---
+  document.getElementById('export-json-btn')?.addEventListener('click', () => {
+    const data = { options: currentOptions, locations: currentLocations, weights: currentWeights };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'rpg-adventure-settings.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  document.getElementById('import-trigger-btn')?.addEventListener('click', () => {
+    document.getElementById('import-file')?.click();
+  });
+
+  document.getElementById('import-file')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target.result as string);
+        // Robust import handles both clean objects and old stringified backups
+        const parseData = (val) => typeof val === 'string' ? JSON.parse(val) : val;
+        saveAdventureData(
+          data.options ? parseData(data.options) : currentOptions,
+          data.locations ? parseData(data.locations) : currentLocations,
+          data.weights ? parseData(data.weights) : currentWeights
+        );
+        location.reload();
+      } catch (err) { alert('Invalid file format.'); }
+    };
+    reader.readAsText(file);
+  });
+
+  init();
+</script>
+

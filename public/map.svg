@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1814"/>
+      <stop offset="100%" style="stop-color:#0f0e0c"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="280" fill="url(#bg)" stroke="#3d3528" stroke-width="1" rx="4"/>
+  <path d="M80 40 L200 30 L320 50 L350 120 L300 200 L180 240 L60 220 L40 120 Z" fill="none" stroke="#3d3528" stroke-width="1.5" opacity="0.6"/>
+  <text x="200" y="150" text-anchor="middle" fill="#9a9186" font-family="Georgia, serif" font-size="14">Manitoba · Ontario · Saskatchewan</text>
+  <text x="200" y="170" text-anchor="middle" fill="#6a6358" font-family="Georgia, serif" font-size="12">Replace public/map.svg with your map image</text>
+</svg>

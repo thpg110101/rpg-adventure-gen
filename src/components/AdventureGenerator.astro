@@ -1,0 +1,80 @@
+---
+// Frontmatter empty
+---
+
+<section class="generator">
+  <h2 class="section-title">2. Generate adventure</h2>
+  
+  <button type="button" class="generate-btn generate-btn-secondary" id="generate-adventure-btn">
+    Generate Adventure
+  </button>
+
+  <output class="result" id="adventure-result" aria-live="polite">
+    <span class="result-placeholder">Click the button to generate an adventure from your options.</span>
+  </output>
+</section>
+
+<script>
+  // MUST be the very first line inside <script>
+  // Check your folder: if options.ts is in src/, use '../options'
+  // If it's in src/data/, use '../data/options'
+  import { adventureOptions } from '../data/options'; 
+
+  const STORAGE_KEY = 'rpg-adventure-options';
+
+  function getOptions() {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (_) {}
+    return JSON.parse(JSON.stringify(adventureOptions));
+  }
+
+  function pickRandom(arr: any[]) {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  function escapeAttr(s: any) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  const btn = document.getElementById('generate-adventure-btn');
+  const resultEl = document.getElementById('adventure-result');
+
+  btn?.addEventListener('click', () => {
+    const options = getOptions();
+    
+    if (!options || options.length === 0) {
+      if (resultEl) {
+        resultEl.innerHTML = '<span class="error">No options found.</span>';
+      }
+      return;
+    }
+
+    const parts = options.map((cat: any) => {
+      const opts = cat.options?.filter((o: any) => o?.label?.trim()) || [];
+      const option = opts.length ? pickRandom(opts) : { label: '(no options)', description: '' };
+      return { 
+        category: cat.title, 
+        label: option.label, 
+        description: option.description 
+      };
+    });
+
+    if (resultEl) {
+      resultEl.innerHTML = parts
+        .map((p: any) => `
+          <div class="result-card">
+            <span class="result-category">${escapeAttr(p.category)}</span>
+            <strong class="result-label">${escapeAttr(p.label)}</strong>
+            ${p.description ? `<span class="result-desc">${escapeAttr(p.description)}</span>` : ''}
+          </div>
+        `).join('');
+    }
+  });
+</script>
